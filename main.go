@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -88,7 +89,7 @@ func handleChirp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type returnVals struct {
-		Valid bool `json:"valid"`
+		CleanedBody string `json:"cleaned_body"`
 	}
 
 	if len(params.Body) > 140 {
@@ -110,8 +111,10 @@ func handleChirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cleanString := helperCleanString(params.Body)
+
 	resp := returnVals{
-		Valid: true,
+		CleanedBody: cleanString,
 	}
 	dat, err := json.Marshal(resp)
 	if err != nil {
@@ -142,4 +145,15 @@ func helperJsonError(w http.ResponseWriter, responseMsg string, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusInternalServerError)
 	w.Write(dat)
+}
+
+func helperCleanString(post string) string {
+	profanity := []string{"kerfuffle", "sharbert", "fornax", "Kerfuffle", "Sharbert", "Fornax"}
+	cleanPost := post
+
+	for _, profane := range profanity {
+		cleanPost = strings.ReplaceAll(cleanPost, profane, "****")
+	}
+
+	return cleanPost
 }
