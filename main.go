@@ -1,17 +1,23 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
-	_ "github.com/lib/pq"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	"github.com/Senaphim/Chirpy/internal/database"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	queries        *database.Queries
 }
 
 func (cfg *apiConfig) middlewareMetricInc(next http.Handler) http.Handler {
@@ -44,6 +50,17 @@ func (cfg *apiConfig) handleReset(w http.ResponseWriter, r *http.Request) {
 func main() {
 	cfg := &apiConfig{}
 	serveMux := http.NewServeMux()
+	if err := godotenv.Load(); err != nil {
+		log.Printf("Error loading environment variables: %v", err)
+		return
+	}
+	dbUrl := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbUrl)
+	if err != nil {
+		log.Printf("Error opening database: %v", err)
+		return
+	}
+	cfg.queries = database.New(db)
 
 	// File server handler
 	fsHandler := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
@@ -64,7 +81,7 @@ func main() {
 		Addr:    ":8080",
 		Handler: serveMux,
 	}
-	err := server.ListenAndServe()
+	err = server.ListenAndServe()
 	if err != nil {
 		fmt.Println(fmt.Errorf("Error serving request:\n%v", err))
 	}
