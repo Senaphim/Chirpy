@@ -9,8 +9,10 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/Senaphim/Chirpy/internal/database"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -18,6 +20,7 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	queries        *database.Queries
+	platform       string
 }
 
 func (cfg *apiConfig) middlewareMetricInc(next http.Handler) http.Handler {
@@ -41,6 +44,18 @@ func (cfg *apiConfig) handleHits(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) handleReset(w http.ResponseWriter, r *http.Request) {
+	if cfg.platform != "dev" {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	err := cfg.queries.DeleteAll(r.Context())
+	if err != nil {
+		log.Printf("Error deleteing all users:\n%v", err)
+		w.WriteHeader(500)
+		return
+	}
+
 	cfg.fileserverHits.Store(0)
 	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -55,6 +70,7 @@ func main() {
 		return
 	}
 	dbUrl := os.Getenv("DB_URL")
+	cfg.platform = os.Getenv("PLATFORM")
 	db, err := sql.Open("postgres", dbUrl)
 	if err != nil {
 		log.Printf("Error opening database: %v", err)
@@ -75,6 +91,8 @@ func main() {
 	serveMux.Handle("POST /admin/reset", hr)
 	hc := http.HandlerFunc(handleChirp)
 	serveMux.Handle("POST /api/validate_chirp", hc)
+	hcr := http.HandlerFunc(cfg.handlerCreateUser)
+	serveMux.Handle("POST /api/users", hcr)
 
 	// Start server
 	server := http.Server{
@@ -174,4 +192,62 @@ func helperCleanString(post string) string {
 	}
 
 	return cleanPost
+}
+
+func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
+	type email struct {
+		Email string `json:"email"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	em := email{}
+	if err := decoder.Decode(&em); err != nil {
+		helperJsonError(w, "Error decoding email:%v", err)
+		return
+	}
+
+	user, err := cfg.helperCreateUser(em.Email, r)
+	if err != nil {
+		log.Printf("Error creating user:\n%v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	type retUser struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+	}
+	rUser := retUser{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+	dat, err := json.Marshal(rUser)
+	if err != nil {
+		helperJsonError(w, "Error marshalling response: %s", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	w.Write(dat)
+}
+
+func (cfg *apiConfig) helperCreateUser(email string, r *http.Request) (database.User, error) {
+	userDetails := database.CreateUserParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now().Local(),
+		UpdatedAt: time.Now().Local(),
+		Email:     email,
+	}
+
+	user, err := cfg.queries.CreateUser(r.Context(), userDetails)
+	if err != nil {
+		fmtErr := fmt.Errorf("Error adding user to database:\n%v", err)
+		return database.User{}, fmtErr
+	}
+
+	return user, nil
 }
