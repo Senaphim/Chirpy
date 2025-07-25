@@ -100,6 +100,8 @@ func main() {
 	serveMux.Handle("POST /api/chirps", hc)
 	hcr := http.HandlerFunc(cfg.handlerCreateUser)
 	serveMux.Handle("POST /api/users", hcr)
+	hac := http.HandlerFunc(cfg.handlerAllChirps)
+	serveMux.Handle("GET /api/chirps", hac)
 
 	// Start server
 	server := http.Server{
@@ -295,4 +297,43 @@ func (cfg *apiConfig) helperCreateChirp(
 	}
 
 	return chirp, nil
+}
+
+func (cfg *apiConfig) handlerAllChirps(w http.ResponseWriter, r *http.Request) {
+	chirps, err := cfg.queries.AllChirps(r.Context())
+	if err != nil {
+		log.Printf("Error fetching chirps:\n%v", err)
+		return
+	}
+
+	type returnChirp struct {
+		Id        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body      string    `json:"body"`
+		UserId    uuid.UUID `json:"user_id"`
+	}
+
+	returnArray := []returnChirp{}
+
+	for _, chirp := range chirps {
+		rChirp := returnChirp{
+			Id:        chirp.ID,
+			CreatedAt: chirp.CreatedAt,
+			UpdatedAt: chirp.UpdatedAt,
+			Body:      chirp.Body,
+			UserId:    chirp.UserID,
+		}
+
+		returnArray = append(returnArray, rChirp)
+	}
+
+	dat, err := json.Marshal(returnArray)
+	if err != nil {
+		helperJsonError(w, "error marshalling json response:%v", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(dat)
 }

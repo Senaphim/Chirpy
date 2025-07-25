@@ -12,4 +12,4 @@ VALUES (
 DELETE FROM chirps;
 
 -- name: AllChirps :many
-SELECT * FROM chirps;
+SELECT * FROM chirps ORDER BY updated_at ASC;

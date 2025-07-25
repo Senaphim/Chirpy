@@ -13,7 +13,7 @@ import (
 )
 
 const allChirps = `-- name: AllChirps :many
-SELECT id, created_at, updated_at, body, user_id FROM chirps
+SELECT id, created_at, updated_at, body, user_id FROM chirps ORDER BY updated_at ASC
 `
 
 func (q *Queries) AllChirps(ctx context.Context) ([]Chirp, error) {
