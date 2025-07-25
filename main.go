@@ -56,6 +56,13 @@ func (cfg *apiConfig) handleReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	err = cfg.queries.ResetChirps(r.Context())
+	if err != nil {
+		log.Printf("Error deleting all chirps:\n%v", err)
+		w.WriteHeader(500)
+		return
+	}
+
 	cfg.fileserverHits.Store(0)
 	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -89,8 +96,8 @@ func main() {
 	serveMux.Handle("GET /admin/metrics", hhi)
 	hr := http.HandlerFunc(cfg.handleReset)
 	serveMux.Handle("POST /admin/reset", hr)
-	hc := http.HandlerFunc(handleChirp)
-	serveMux.Handle("POST /api/validate_chirp", hc)
+	hc := http.HandlerFunc(cfg.handleChirp)
+	serveMux.Handle("POST /api/chirps", hc)
 	hcr := http.HandlerFunc(cfg.handlerCreateUser)
 	serveMux.Handle("POST /api/users", hcr)
 
@@ -112,9 +119,10 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(http.StatusText(http.StatusOK)))
 }
 
-func handleChirp(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) handleChirp(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Body string `json:"body"`
+		Body string    `json:"body"`
+		Id   uuid.UUID `json:"user_id"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -122,10 +130,6 @@ func handleChirp(w http.ResponseWriter, r *http.Request) {
 	if err := decoder.Decode(&params); err != nil {
 		helperJsonError(w, "Error decoding parameters: %s", err)
 		return
-	}
-
-	type returnVals struct {
-		CleanedBody string `json:"cleaned_body"`
 	}
 
 	if len(params.Body) > 140 {
@@ -148,9 +152,27 @@ func handleChirp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cleanString := helperCleanString(params.Body)
+	chirp, err := cfg.helperCreateChirp(cleanString, params.Id, r)
+	if err != nil {
+		log.Printf("Error creating chirp:\n%v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	type returnVals struct {
+		Id        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body      string    `json:"body"`
+		UserId    uuid.UUID `json:"user_id"`
+	}
 
 	resp := returnVals{
-		CleanedBody: cleanString,
+		Id:        chirp.ID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+		Body:      chirp.Body,
+		UserId:    chirp.UserID,
 	}
 	dat, err := json.Marshal(resp)
 	if err != nil {
@@ -158,7 +180,7 @@ func handleChirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(201)
 	w.Write(dat)
 }
 
@@ -250,4 +272,27 @@ func (cfg *apiConfig) helperCreateUser(email string, r *http.Request) (database.
 	}
 
 	return user, nil
+}
+
+func (cfg *apiConfig) helperCreateChirp(
+	body string,
+	user uuid.UUID,
+	r *http.Request,
+) (database.Chirp, error) {
+
+	chirpDetails := database.CreateChirpParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now().Local(),
+		UpdatedAt: time.Now().Local(),
+		Body:      body,
+		UserID:    user,
+	}
+
+	chirp, err := cfg.queries.CreateChirp(r.Context(), chirpDetails)
+	if err != nil {
+		fmtErr := fmt.Errorf("Error adding chirp to database:\n%v", err)
+		return database.Chirp{}, fmtErr
+	}
+
+	return chirp, nil
 }
