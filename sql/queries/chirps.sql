@@ -13,3 +13,6 @@ DELETE FROM chirps;
 
 -- name: AllChirps :many
 SELECT * FROM chirps ORDER BY updated_at ASC;
+
+-- name: GetChirpById :one
+SELECt * FROM chirps WHERE id=$1;

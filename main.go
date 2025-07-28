@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Senaphim/Chirpy/internal/auth"
 	"github.com/Senaphim/Chirpy/internal/database"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -102,6 +103,10 @@ func main() {
 	serveMux.Handle("POST /api/users", hcr)
 	hac := http.HandlerFunc(cfg.handlerAllChirps)
 	serveMux.Handle("GET /api/chirps", hac)
+	hci := http.HandlerFunc(cfg.handlerChirpById)
+	serveMux.Handle("GET /api/chirps/{chirpID}", hci)
+	hl := http.HandlerFunc(cfg.handlerLogin)
+	serveMux.Handle("POST /api/login", hl)
 
 	// Start server
 	server := http.Server{
@@ -220,7 +225,8 @@ func helperCleanString(post string) string {
 
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
 	type email struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -230,7 +236,7 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	user, err := cfg.helperCreateUser(em.Email, r)
+	user, err := cfg.helperCreateUser(em.Email, em.Password, r)
 	if err != nil {
 		log.Printf("Error creating user:\n%v", err)
 		w.WriteHeader(500)
@@ -259,12 +265,23 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 	w.Write(dat)
 }
 
-func (cfg *apiConfig) helperCreateUser(email string, r *http.Request) (database.User, error) {
+func (cfg *apiConfig) helperCreateUser(
+	email string,
+	password string,
+	r *http.Request,
+) (database.User, error) {
+
+	hashedPassword, err := auth.HashPassword(password)
+	if err != nil {
+		fmtErr := fmt.Errorf("Error with password:\n%v", err)
+		return database.User{}, fmtErr
+	}
 	userDetails := database.CreateUserParams{
-		ID:        uuid.New(),
-		CreatedAt: time.Now().Local(),
-		UpdatedAt: time.Now().Local(),
-		Email:     email,
+		ID:             uuid.New(),
+		CreatedAt:      time.Now().Local(),
+		UpdatedAt:      time.Now().Local(),
+		Email:          email,
+		HashedPassword: hashedPassword,
 	}
 
 	user, err := cfg.queries.CreateUser(r.Context(), userDetails)
@@ -335,5 +352,97 @@ func (cfg *apiConfig) handlerAllChirps(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	w.Write(dat)
+}
+
+func (cfg *apiConfig) handlerChirpById(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("chirpID")
+	chirp_uuid, err := uuid.Parse(id)
+	if err != nil {
+		log.Printf("Error parsing chirpID:\n%v", err)
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	chirp, err := cfg.queries.GetChirpById(r.Context(), chirp_uuid)
+	if err != nil {
+		log.Printf("Error fetching chirps:\n%v", err)
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	type returnChirp struct {
+		Id        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body      string    `json:"body"`
+		UserId    uuid.UUID `json:"user_id"`
+	}
+	rChirp := returnChirp{
+		Id:        chirp.ID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+		Body:      chirp.Body,
+		UserId:    chirp.UserID,
+	}
+
+	dat, err := json.Marshal(rChirp)
+	if err != nil {
+		helperJsonError(w, "error marshalling json response:%v", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(dat)
+}
+
+func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
+	type user struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	usr := user{}
+	if err := decoder.Decode(&usr); err != nil {
+		helperJsonError(w, "Error decoding user:\n%v", err)
+		return
+	}
+
+	dbUsr, err := cfg.queries.GetUserByEmail(r.Context(), usr.Email)
+	if err != nil {
+		log.Printf("Error fetching user from email:\n%v", err)
+		w.WriteHeader(401)
+		w.Write([]byte("Incorrect email or password"))
+		return
+	}
+
+	err = auth.CheckPasswordHash(usr.Password, dbUsr.HashedPassword)
+	if err != nil {
+		log.Printf("Error bad password:\n%v", err)
+		w.WriteHeader(401)
+		w.Write([]byte("Incorrect email or password"))
+		return
+	}
+
+	type retUser struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+	}
+	rUser := retUser{
+		ID:        dbUsr.ID,
+		CreatedAt: dbUsr.CreatedAt,
+		UpdatedAt: dbUsr.UpdatedAt,
+		Email:     dbUsr.Email,
+	}
+	dat, err := json.Marshal(rUser)
+	if err != nil {
+		helperJsonError(w, "Error marshalling response: %s", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	w.Write(dat)
 }
