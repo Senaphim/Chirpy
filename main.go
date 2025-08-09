@@ -22,6 +22,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	queries        *database.Queries
 	platform       string
+	secret         string
 }
 
 func (cfg *apiConfig) middlewareMetricInc(next http.Handler) http.Handler {
@@ -79,6 +80,7 @@ func main() {
 	}
 	dbUrl := os.Getenv("DB_URL")
 	cfg.platform = os.Getenv("PLATFORM")
+	cfg.secret = os.Getenv("SECRET")
 	db, err := sql.Open("postgres", dbUrl)
 	if err != nil {
 		log.Printf("Error opening database: %v", err)
@@ -132,8 +134,24 @@ func (cfg *apiConfig) handleChirp(w http.ResponseWriter, r *http.Request) {
 		Id   uuid.UUID `json:"user_id"`
 	}
 
+	jwt, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting bearer token:\n%v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	userId, err := auth.ValidateJWT(jwt, cfg.secret)
+	if err != nil {
+		log.Printf("Invalid JWT:\n%v", err)
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
 	decoder := json.NewDecoder(r.Body)
-	params := parameters{}
+	params := parameters{
+		Id: userId,
+	}
 	if err := decoder.Decode(&params); err != nil {
 		helperJsonError(w, "Error decoding parameters: %s", err)
 		return
@@ -398,15 +416,24 @@ func (cfg *apiConfig) handlerChirpById(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 	type user struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
-	usr := user{}
+	usr := user{
+		Email:            "",
+		Password:         "",
+		ExpiresInSeconds: 3600,
+	}
 	if err := decoder.Decode(&usr); err != nil {
 		helperJsonError(w, "Error decoding user:\n%v", err)
 		return
+	}
+	if usr.ExpiresInSeconds > 3600 || usr.ExpiresInSeconds < 0 {
+		log.Printf("User requested expiry longer than 1hr")
+		usr.ExpiresInSeconds = 3600
 	}
 
 	dbUsr, err := cfg.queries.GetUserByEmail(r.Context(), usr.Email)
@@ -425,17 +452,33 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	durationString := fmt.Sprintf("%vs", usr.ExpiresInSeconds)
+	durationTime, err := time.ParseDuration(durationString)
+	if err != nil {
+		log.Printf("Error parsing duration string:\n%v", err)
+		w.WriteHeader(500)
+		return
+	}
+	jwt, err := auth.MakeJWT(dbUsr.ID, cfg.secret, durationTime)
+	if err != nil {
+		log.Printf("Error making JWT:\n%v", err)
+		w.WriteHeader(500)
+		return
+	}
+
 	type retUser struct {
 		ID        uuid.UUID `json:"id"`
 		CreatedAt time.Time `json:"created_at"`
 		UpdatedAt time.Time `json:"updated_at"`
 		Email     string    `json:"email"`
+		Token     string    `json:"token"`
 	}
 	rUser := retUser{
 		ID:        dbUsr.ID,
 		CreatedAt: dbUsr.CreatedAt,
 		UpdatedAt: dbUsr.UpdatedAt,
 		Email:     dbUsr.Email,
+		Token:     jwt,
 	}
 	dat, err := json.Marshal(rUser)
 	if err != nil {

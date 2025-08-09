@@ -3,6 +3,8 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -96,4 +98,18 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 		return uuid.Nil, fmtErr
 	}
 	return id, nil
+}
+
+func GetBearerToken(headers http.Header) (string, error) {
+	authorisation := headers.Get("Authorization")
+	if authorisation == "" {
+		return "", errors.New("No authorisation")
+	}
+
+	authorisationToken, found := strings.CutPrefix(strings.TrimSpace(authorisation), "Bearer ")
+	if !found {
+		return "", errors.New("Malformed bearer header")
+	}
+
+	return authorisationToken, nil
 }
