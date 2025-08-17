@@ -120,6 +120,10 @@ func main() {
 	serveMux.Handle("POST /api/refresh", hre)
 	hrev := http.HandlerFunc(cfg.handlerRevoke)
 	serveMux.Handle("POST /api/revoke", hrev)
+	hcpe := http.HandlerFunc(cfg.handleChangePwd)
+	serveMux.Handle("PUT /api/users", hcpe)
+	hdc := http.HandlerFunc(cfg.handlerDeleteChirp)
+	serveMux.Handle("DELETE /api/chirps/{chirpID}", hdc)
 
 	// Start server
 	server := http.Server{
@@ -602,5 +606,120 @@ func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (cfg *apiConfig) handleChangePwd(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting token from header:\n%v", err)
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	userId, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		log.Printf("Invalid JWT:\n%v", err)
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	type newData struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	data := newData{}
+	if err := decoder.Decode(&data); err != nil {
+		helperJsonError(w, "Error decoding user:\n%v", err)
+		return
+	}
+
+	hash, err := auth.HashPassword(data.Password)
+	if err != nil {
+		log.Printf("Failed to hash password:\n%v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	update := database.UpdateUsrEmailPwdParams{
+		ID:             userId,
+		UpdatedAt:      time.Now().Local(),
+		Email:          data.Email,
+		HashedPassword: hash,
+	}
+	user, err := cfg.queries.UpdateUsrEmailPwd(r.Context(), update)
+	if err != nil {
+		log.Printf("Failed to update user information:\n%v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	type retUser struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+	}
+	rUser := retUser{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+	dat, err := json.Marshal(rUser)
+	if err != nil {
+		helperJsonError(w, "Error marshalling response: %s", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(dat)
+}
+
+func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("chirpID")
+	chirp_uuid, err := uuid.Parse(id)
+	if err != nil {
+		log.Printf("Error parsing chirpID:\n%v", err)
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting token from header:\n%v", err)
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	userId, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		log.Printf("Invalid JWT:\n%v", err)
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	chirp, err := cfg.queries.GetChirpById(r.Context(), chirp_uuid)
+	if err != nil {
+		log.Printf("Error fetching chirp:\n%v", err)
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	if chirp.UserID != userId {
+		log.Printf("User ids do not match - failed to delete")
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	err = cfg.queries.DeleteChirpById(r.Context(), chirp_uuid)
+	if err != nil {
+		log.Printf("Error deleting chirp:\n%v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }

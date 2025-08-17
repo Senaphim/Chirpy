@@ -16,3 +16,6 @@ SELECT * FROM chirps ORDER BY updated_at ASC;
 
 -- name: GetChirpById :one
 SELECt * FROM chirps WHERE id=$1;
+
+-- name: DeleteChirpById :exec
+DELETE FROM chirps WHERE id=$1;
