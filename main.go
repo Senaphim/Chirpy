@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -372,7 +373,6 @@ func (cfg *apiConfig) handlerAllChirps(w http.ResponseWriter, r *http.Request) {
 		}
 		chirps, err = cfg.queries.GetChirpsByAuthor(r.Context(), author_uuid)
 		if err != nil {
-
 			log.Printf("Error fetching chirps:\n%v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 		}
@@ -402,6 +402,21 @@ func (cfg *apiConfig) handlerAllChirps(w http.ResponseWriter, r *http.Request) {
 		}
 
 		returnArray = append(returnArray, rChirp)
+	}
+
+	sort := r.URL.Query().Get("sort")
+	if sort != "" {
+		if sort == "asc" {
+			slices.SortFunc(returnArray, func(a, b returnChirp) int {
+				return a.CreatedAt.Compare(b.CreatedAt)
+			})
+		} else if sort == "desc" {
+			slices.SortFunc(returnArray, func(a, b returnChirp) int {
+				return -(a.CreatedAt.Compare(b.CreatedAt))
+			})
+		} else {
+			log.Printf("Unexpected query parameter value: %v", sort)
+		}
 	}
 
 	dat, err := json.Marshal(returnArray)
