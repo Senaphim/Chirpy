@@ -122,3 +122,17 @@ func MakeRefreshToken() (string, error) {
 	refreshToken := hex.EncodeToString(byteArr)
 	return refreshToken, nil
 }
+
+func GetAPIKey(headers http.Header) (string, error) {
+	authorisation := headers.Get("Authorization")
+	if authorisation == "" {
+		return "", errors.New("No authorisation")
+	}
+
+	apiKey, found := strings.CutPrefix(strings.TrimSpace(authorisation), "ApiKey ")
+	if !found {
+		return "", errors.New("Malformed ApiKey header")
+	}
+
+	return apiKey, nil
+}
